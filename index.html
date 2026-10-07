@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>에임 트레이너</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #1a2133;
+    --text: #e8ecf4;
+    --muted: #8a94a8;
+    --accent: #ff4d5e;
+    --easy: #3ccf7a;
+    --normal: #f2b134;
+    --hard: #ff4d5e;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* 상단 HUD */
+  #hud {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    padding: 14px;
+    background: var(--panel);
+    font-size: 18px;
+  }
+  #hud .item span { font-weight: 700; font-size: 22px; margin-left: 6px; }
+  #hud .mode-label { font-weight: 700; }
+
+  /* 게임 영역 */
+  #arena {
+    position: relative;
+    flex: 1;
+    cursor: crosshair;
+    background:
+      radial-gradient(circle at center, #172036 0%, var(--bg) 70%);
+  }
+
+  /* 표적 */
+  .target {
+    position: absolute;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle,
+      #fff 0 15%, var(--accent) 15% 35%, #fff 35% 55%, var(--accent) 55% 75%, #fff 75% 100%);
+    box-shadow: 0 0 18px rgba(255, 77, 94, 0.6);
+    animation: pop 0.12s ease-out;
+  }
+  /* 남은 시간 표시 링 */
+  .target::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.8);
+    animation: shrink var(--life) linear forwards;
+  }
+  @keyframes pop { from { transform: translate(-50%, -50%) scale(0.3); } to { transform: translate(-50%, -50%) scale(1); } }
+  @keyframes shrink { from { transform: scale(1); opacity: 1; } to { transform: scale(0.4); opacity: 0.2; } }
+
+  .hit-fx, .miss-fx {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    font-weight: 700;
+    animation: float 0.6s ease-out forwards;
+  }
+  .hit-fx { color: var(--easy); }
+  .miss-fx { color: var(--muted); font-size: 14px; }
+  @keyframes float { to { transform: translate(-50%, -150%); opacity: 0; } }
+
+  /* 오버레이 화면 (시작/카운트다운/결과) */
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: rgba(10, 14, 22, 0.88);
+    cursor: default;
+    text-align: center;
+    padding: 16px;
+  }
+  .hidden { display: none !important; }
+  h1 { font-size: 44px; letter-spacing: 2px; }
+  .desc { color: var(--muted); line-height: 1.6; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+
+  .mode-btn, .opt-btn, .main-btn {
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text);
+    background: var(--panel);
+    transition: transform 0.1s, border-color 0.1s;
+  }
+  .mode-btn:hover, .opt-btn:hover, .main-btn:hover { transform: translateY(-2px); }
+  .mode-btn { min-width: 150px; }
+  .mode-btn small { display: block; font-weight: 400; color: var(--muted); margin-top: 4px; }
+  .mode-btn.selected[data-mode="easy"]   { border-color: var(--easy); }
+  .mode-btn.selected[data-mode="normal"] { border-color: var(--normal); }
+  .mode-btn.selected[data-mode="hard"]   { border-color: var(--hard); }
+  .opt-btn.selected { border-color: var(--text); }
+  .main-btn { background: var(--accent); font-size: 20px; padding: 14px 48px; }
+
+  #countdown-num { font-size: 120px; font-weight: 800; }
+
+  .result-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+    gap: 12px;
+  }
+  .stat { background: var(--panel); border-radius: 10px; padding: 14px 20px; }
+  .stat .label { color: var(--muted); font-size: 14px; }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 4px; }
+  #new-best { color: var(--normal); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="item">모드 <span id="hud-mode" class="mode-label">-</span></div>
+  <div class="item">남은 시간 <span id="hud-time">0.0</span>s</div>
+  <div class="item">명중 <span id="hud-hits">0</span></div>
+  <div class="item">놓침 <span id="hud-missed">0</span></div>
+</div>
+
+<div id="arena">
+  <!-- 시작 화면 -->
+  <div id="start-screen" class="overlay">
+    <h1>🎯 에임 트레이너</h1>
+    <p class="desc">잠깐 나타났다 사라지는 표적을 마우스로 클릭하세요.<br>제한 시간 동안 몇 개를 맞추는지 도전!</p>
+
+    <div class="row" id="mode-row">
+      <button class="mode-btn" data-mode="easy">EASY<small>표적 1.5초 유지</small></button>
+      <button class="mode-btn" data-mode="normal">NORMAL<small>표적 1.0초 유지</small></button>
+      <button class="mode-btn" data-mode="hard">HARD<small>표적 0.6초 유지</small></button>
+    </div>
+
+    <div class="row" id="duration-row">
+      <button class="opt-btn" data-sec="15">15초</button>
+      <button class="opt-btn" data-sec="30">30초</button>
+      <button class="opt-btn" data-sec="60">60초</button>
+    </div>
+
+    <p class="desc" id="best-text"></p>
+    <button class="main-btn" id="start-btn">시작</button>
+  </div>
+
+  <!-- 카운트다운 -->
+  <div id="countdown-screen" class="overlay hidden">
+    <div id="countdown-num">3</div>
+  </div>
+
+  <!-- 결과 화면 -->
+  <div id="result-screen" class="overlay hidden">
+    <h1>결과</h1>
+    <p class="desc" id="result-mode"></p>
+    <div class="result-grid">
+      <div class="stat"><div class="label">명중</div><div class="value" id="r-hits">0</div></div>
+      <div class="stat"><div class="label">나타난 표적</div><div class="value" id="r-spawned">0</div></div>
+      <div class="stat"><div class="label">명중률 (표적 기준)</div><div class="value" id="r-rate">0%</div></div>
+      <div class="stat"><div class="label">클릭 정확도</div><div class="value" id="r-acc">0%</div></div>
+      <div class="stat"><div class="label">평균 반응 속도</div><div class="value" id="r-react">-</div></div>
+      <div class="stat"><div class="label">최고 기록</div><div class="value" id="r-best">0</div></div>
+    </div>
+    <p id="new-best" class="hidden">🏆 새로운 최고 기록!</p>
+    <div class="row">
+      <button class="main-btn" id="retry-btn">다시 하기</button>
+      <button class="opt-btn" id="menu-btn">메뉴로</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 모드별 표적 유지 시간(ms) — 길수록 쉬움, 짧을수록 어려움
+  const MODES = {
+    easy:   { name: "EASY",   life: 1500, color: "var(--easy)" },
+    normal: { name: "NORMAL", life: 1000, color: "var(--normal)" },
+    hard:   { name: "HARD",   life: 600,  color: "var(--hard)" },
+  };
+  const SPAWN_GAP = 250;     // 표적이 사라진 뒤 다음 표적까지 간격(ms)
+  const TARGET_SIZE = 60;
+
+  const $ = (id) => document.getElementById(id);
+  const arena = $("arena");
+
+  let mode = "easy";
+  let duration = 30;
+  let state = null;
+
+  // ---------- 최고 기록 (localStorage) ----------
+  function bestKey() { return `aim-best-${mode}-${duration}`; }
+  function getBest() {
+    try { return Number(localStorage.getItem(bestKey())) || 0; } catch { return 0; }
+  }
+  function setBest(v) {
+    try { localStorage.setItem(bestKey(), String(v)); } catch {}
+  }
+
+  // ---------- 메뉴 ----------
+  function selectButtons(rowId, attr, value) {
+    document.querySelectorAll(`#${rowId} button`).forEach((b) => {
+      b.classList.toggle("selected", b.dataset[attr] === String(value));
+    });
+  }
+  function refreshMenu() {
+    selectButtons("mode-row", "mode", mode);
+    selectButtons("duration-row", "sec", duration);
+    $("best-text").textContent = `최고 기록 (${MODES[mode].name}, ${duration}초): ${getBest()}개`;
+    $("hud-mode").textContent = MODES[mode].name;
+    $("hud-mode").style.color = MODES[mode].color;
+    $("hud-time").textContent = duration.toFixed(1);
+  }
+  $("mode-row").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    mode = b.dataset.mode; refreshMenu();
+  });
+  $("duration-row").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    duration = Number(b.dataset.sec); refreshMenu();
+  });
+
+  function show(screenId) {
+    ["start-screen", "countdown-screen", "result-screen"].forEach((id) =>
+      $(id).classList.toggle("hidden", id !== screenId));
+  }
+
+  // ---------- 게임 흐름 ----------
+  function countdown() {
+    show("countdown-screen");
+    let n = 3;
+    $("countdown-num").textContent = n;
+    const t = setInterval(() => {
+      n--;
+      if (n > 0) { $("countdown-num").textContent = n; }
+      else { clearInterval(t); show(null); startGame(); }
+    }, 700);
+  }
+
+  function startGame() {
+    state = {
+      hits: 0, missed: 0, spawned: 0, clicks: 0,
+      reactions: [], endAt: performance.now() + duration * 1000,
+      target: null, despawnTimer: null, spawnTimer: null, running: true,
+    };
+    updateHud();
+    spawnTarget();
+    requestAnimationFrame(tick);
+  }
+
+  function tick() {
+    if (!state || !state.running) return;
+    const left = Math.max(0, state.endAt - performance.now());
+    $("hud-time").textContent = (left / 1000).toFixed(1);
+    if (left <= 0) { endGame(); return; }
+    requestAnimationFrame(tick);
+  }
+
+  function spawnTarget() {
+    if (!state.running) return;
+    const life = MODES[mode].life;
+    const pad = TARGET_SIZE;
+    const x = pad + Math.random() * (arena.clientWidth - pad * 2);
+    const y = pad + Math.random() * (arena.clientHeight - pad * 2);
+
+    const el = document.createElement("div");
+    el.className = "target";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.style.setProperty("--life", life + "ms");
+    el.dataset.born = performance.now();
+    arena.appendChild(el);
+
+    state.target = el;
+    state.spawned++;
+
+    // 시간 안에 못 맞추면 사라짐
+    state.despawnTimer = setTimeout(() => {
+      if (state.target !== el) return;
+      removeTarget();
+      state.missed++;
+      effect("miss-fx", x, y, "놓침");
+      updateHud();
+      scheduleNext();
+    }, life);
+  }
+
+  function removeTarget() {
+    clearTimeout(state.despawnTimer);
+    if (state.target) state.target.remove();
+    state.target = null;
+  }
+
+  function scheduleNext() {
+    state.spawnTimer = setTimeout(spawnTarget, SPAWN_GAP);
+  }
+
+  // 게임 영역 클릭 처리
+  arena.addEventListener("mousedown", (e) => {
+    if (!state || !state.running || e.button !== 0) return;
+    state.clicks++;
+    const t = e.target;
+    if (t.classList.contains("target") && t === state.target) {
+      state.hits++;
+      state.reactions.push(performance.now() - Number(t.dataset.born));
+      effect("hit-fx", parseFloat(t.style.left), parseFloat(t.style.top), "+1");
+      removeTarget();
+      updateHud();
+      scheduleNext();
+    }
+  });
+
+  function effect(cls, x, y, text) {
+    const fx = document.createElement("div");
+    fx.className = cls;
+    fx.style.left = x + "px";
+    fx.style.top = y + "px";
+    fx.textContent = text;
+    arena.appendChild(fx);
+    setTimeout(() => fx.remove(), 600);
+  }
+
+  function updateHud() {
+    $("hud-hits").textContent = state.hits;
+    $("hud-missed").textContent = state.missed;
+  }
+
+  function endGame() {
+    state.running = false;
+    clearTimeout(state.spawnTimer);
+    if (state.target) state.spawned--; // 종료 시점에 떠 있던 표적은 집계에서 제외
+    removeTarget();
+    $("hud-time").textContent = "0.0";
+
+    const { hits, spawned, clicks, reactions } = state;
+    const best = getBest();
+    const isNewBest = hits > best;
+    if (isNewBest) setBest(hits);
+
+    $("result-mode").textContent = `${MODES[mode].name} 모드 · ${duration}초 · 표적 유지 ${MODES[mode].life / 1000}초`;
+    $("r-hits").textContent = hits;
+    $("r-spawned").textContent = spawned;
+    $("r-rate").textContent = spawned ? Math.round((hits / spawned) * 100) + "%" : "0%";
+    $("r-acc").textContent = clicks ? Math.round((hits / clicks) * 100) + "%" : "0%";
+    $("r-react").textContent = reactions.length
+      ? Math.round(reactions.reduce((a, b) => a + b, 0) / reactions.length) + "ms" : "-";
+    $("r-best").textContent = Math.max(best, hits);
+    $("new-best").classList.toggle("hidden", !isNewBest);
+    show("result-screen");
+  }
+
+  $("start-btn").addEventListener("click", countdown);
+  $("retry-btn").addEventListener("click", countdown);
+  $("menu-btn").addEventListener("click", () => { refreshMenu(); show("start-screen"); });
+  arena.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  refreshMenu();
+</script>
+</body>
+</html>
